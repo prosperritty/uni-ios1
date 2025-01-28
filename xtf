@@ -1,0 +1,341 @@
+#!/bin/sh
+
+#IOS project 1.
+#VUT FIT 17.03.2024
+#ALBERT TIKAIEV, xtikaia00 
+
+#CamelCase for functions
+#snake_case for bool variables
+#flatcase for other variables
+
+export POSIXLY_CORRECT=yes
+export LC_ALL=C
+
+#User name variable and it's boolean
+name=""
+name_used=false
+
+#We can use only one command, so we need this boolean to prevent this
+command_used=false
+
+#Some booleans for commands
+list_currency_used=false
+list_used=false
+status_used=false
+profit_used=false
+
+#Variables for filters -a, -c and -b
+after=""
+before=""
+currency=""
+
+#These booleans are needed to execute certain filters
+filter_a=false
+filter_b=false
+filter_c=false
+
+#Boolean for FileCheck function
+check_no_file=true
+
+#Boolean for LogsCheck function (It is boolean in the abstract)
+logs_check=0
+
+#Text for help function
+helptext=""
+
+#Variable for profit (20 by default)
+xtfprofit=20
+
+#Called by -h or --help
+Help(){
+	helptext="****************************************     HELP     ****************************************\n
+Commands :\n
+		1	\"list\"          will write out logs with specified \"USER\"\n
+		2	\"list-currency\" will write out currencies of specified \"USER\"\n
+		3	\"status\"        will write out all currencies and their amount of specified \"USER\"\n
+		4	\"profit\" 		  will write out all currencies and their amount of specified \"USER\" but with profit\n
+		!	ONLY ONE COMMAND CAN BE EXCECUTED, OTHERWISE PROGRAM WILL FAIL
+Filters :\n
+		1	\"-a\" \"DATE\"     will filter logs that were after specified date\n
+		2	\"-b\" \"DATE\"     will filter logs that were before specified date\n
+		3	\"-c\" \"CURRENCY\" will filter logs that have specified currencies\n
+Other :\n
+		1	\"-h\" and \"--help\" will write out this manual\n
+		2	DATE must be specified like this : \"YYYY-MM-DD HH:MM:SS\"\n
+		3	This Program won't work without specified \"USER\"
+		!	Also \"USER\" can't have same name as commands, filters or logs\n
+		4	profit can be set by using 'export XTF_PROFIT=' ; by default this value is set to 20\n
+		5	logs must be specified as the last arguments\n
+		6	if there is no command, but there are \"USER\" and logs specified, program will call \"list\" command by default
+Usage example :\n
+		+	./xtf TraderName -c \"USD\" -a \"2024-01-01 12:00:00\" -b \"2024-01-02 12:00:00\" \"file.log\" \"file2.log.gz\"\n
+****************************************     HELP     ****************************************"
+	echo "$helptext"
+}
+
+#--FILTERS AND COMMANDS FUNCTIONS--
+
+#This is filter and command section and all function that's related
+#Command that always be used - prints out all logs with certain name
+List(){
+	awk -F';' -v name="$name" '{if(name == $1) print}'
+}
+#Filter that will sort logs after the date was given
+After(){
+	if "$filter_a";then
+		awk -F';' -v after="$after" '{ if(after < $2) print}'
+	else
+		awk '{print}'
+	fi
+}
+#Filter that will sort logs before the date was given
+Before(){
+	if "$filter_b"; then
+		awk -F';' -v before="$before" '{ if(before > $2) print}'
+	else
+		awk '{print}'
+	fi
+}
+#Filter that will sort logs accordint to the currencies was given
+SortCurrency(){
+	#substring check
+	if "$filter_c"; then
+		awk -F';' -v currency="$currency" '{ if(index(currency, $3) != 0) print}'
+	else
+		awk '{print}'
+	fi
+}
+#Command that prints out all the currencies certain user have
+ListCurrency(){
+	awk -F';' '{print $3}' | sort | uniq
+}
+#Command that prints out balance certain user have
+Status (){
+	awk -F';' '{currency_array[$3]+=$4}END{
+		for (currency in currency_array){
+        printf("%s : %.4f\n", currency, currency_array[currency]);
+		}
+	}' | sort 
+}
+#Command that prints out balance with profit certain user have
+Profit (){
+	#if XTF_PROFIT is set, then it will be used
+	xtfprofit="${XTF_PROFIT:-20}"
+	awk -F':' -v profit="$xtfprofit" '{
+	currency_array[$1]=$2;
+	if(currency_array[$1]>0) currency_array[$1] = $2*(profit/100+1);
+	}
+	END{
+		for (currency in currency_array){
+        printf("%s: %.4f\n", currency, currency_array[currency]);
+		}
+	}' | sort
+}
+
+#--HELP CHECK, PARSE ARGUMENTS AND READ LOGS--
+
+#Function to check if there is call for help
+HelpCheck(){
+	while [ $# -gt 0 ]; do
+		if [ "$1" = "--help" ] || [ "$1" = "-h" ] ;then
+			Help
+			exit 0
+		else
+			shift
+		fi
+	done
+}
+#Function to parse arguments
+GetArgs(){
+	while ! [ -f "$1" ]; do
+		#Filters will be cathced by this if
+		if echo "$1"| grep -Eq "^-" ;then
+			case "$1" in
+				"-a")
+					if $filter_a; then
+						echo "-a can called only one time">&2
+						exit 1
+					fi
+					after="$2"
+					filter_a=true
+					shift 2
+					;;
+				"-b")
+					if $filter_b; then
+						echo "-b can called only one time">&2
+						exit 1
+					fi
+					before="$2"
+					filter_b=true
+					shift 2
+					;;
+				"-c")
+					if echo "$2" | grep -v -Eq "^[a-zA-Z]{3}$"; then
+						echo "Currency wasn't specified correctly" >&2
+						exit 1
+					fi
+					if $filter_c; then
+						currency="$currency $2"
+					else
+						currency="$2"
+						filter_c=true
+					fi
+					shift 2
+					;;
+				*)
+					echo "Unknown argument">&2
+					exit 1
+					;;
+			esac
+		elif [ "$1" = "list" ]; then
+			if "$command_used"; then
+				echo "Can't be more than one command at one time">&2
+				exit 1
+			fi
+			list_used=true
+			command_used=true
+			shift	
+		elif [ "$1" = "list-currency" ]; then
+			if "$command_used"; then
+				echo "Can't be more than one command at one time">&2
+				exit 1
+			fi
+			list_currency_used=true
+			command_used=true
+			shift	
+		elif [ "$1" = "status" ]; then
+			if "$command_used"; then
+				echo "Can't be more than one command at one time">&2
+				exit 1
+			fi
+			status_used=true
+			command_used=true
+			shift
+		elif [ "$1" = "profit" ]; then
+			if "$command_used"; then
+				echo "Can't be more than one command at one time">&2
+				exit 1
+			fi
+			profit_used=true
+			command_used=true
+			shift				
+		else
+			if "$name_used"; then
+				echo "Bad argument">&2
+				exit 1
+			fi
+			name_used=true
+			name="$1"
+			shift
+		fi
+	done
+}
+#Function to read arguments (print out)
+LogsRead(){
+	while [ $# -gt 0 ]; do
+		#File is catched by -f
+		if [ -f "$1" ]; then
+			if echo "$1" | grep -Eq "\.gz$";then
+					zcat "$1"
+					shift
+			else
+				cat "$1"
+				shift
+			fi
+		else
+			shift
+		fi
+	done
+}
+
+#--COMMAND PROCESS--
+
+#There is function for commands and it's realization through boolean variables
+Command(){
+	if $list_currency_used; then
+		ListCurrency
+	elif $status_used; then
+		Status
+	elif $profit_used; then
+		Status | Profit
+	fi
+}
+
+#--ERROR CONDITIONS CHECK--
+
+#There must be USER name
+NameCheck() {
+	if [ "$name_used" = false ]; then
+		echo "Name wan't specified">&2
+		exit 1
+	fi
+}
+#Error condition when date or time wasn't specified correctly
+TimeCheck() {
+	if "$filter_a";then
+		if echo "$after" | grep -v -Eq "^([0-9]{4})-(1[0-2]|0[1-9])-(3[0-1]|[1-2][0-9]|0[1-9]) (2[0-3]|[0-1][0-9]):([0-5][0-9]):([0-5][0-9])$";then
+			echo "Date wasn't specified correctly">&2
+			exit 1
+		fi
+	fi
+	if "$filter_b";then
+		if echo "$before" | grep -v -Eq "^([0-9]{4})-(1[0-2]|0[1-9])-(3[0-1]|[1-2][0-9]|0[1-9]) (2[0-3]|[0-1][0-9]):([0-5][0-9]):([0-5][0-9])$";then
+			echo "Date wasn't specified correctly">&2
+			exit 1
+		fi
+	fi
+}
+#Error condition if there is no files or file can't be opened
+FileCheck() {
+	while [ $# -gt 0 ]; do
+		if [ -f "$1" ]; then
+			#Error condition when file isn't readable
+			if [ ! -r "$1" ]; then
+				echo "File can't be opened" >&2
+				exit 1
+			fi
+			check_no_file=false
+		fi
+		shift 1
+	done
+	if "$check_no_file"; then
+		echo "At least one file must be specified" >&2
+		exit 1
+	fi
+}
+#Error conditions in readed logs.
+LogsCheck() {
+	#1 - Name and value cant be empty
+	#2 - Time can be specified only as "YYYY-MM-DD HH:MM:SS"
+	#3 - Currency must have 3 capital letters
+	logs_check="$(LogsRead "$@" | awk -F';' -v stat=0 '{
+	if ($1 == "" || $4 == "" || $4 == 0) stat = 1; 
+	if (!match($2, /^([0-9]{4})-(1[0-2]|0[1-9])-(3[0-1]|[1-2][0-9]|0[1-9]) (2[0-3]|[0-1][0-9]):([0-5][0-9]):([0-5][0-9])$/)) stat = 1;
+	if(!match($3, /^[a-zA-Z]{3}$/)) stat = 1;
+	} END{print stat}')"
+	if [ "$logs_check" = 1 ]; then
+		echo "Log error" >&2
+		exit 1
+	fi
+}
+
+#--MAIN FUNCTION--
+
+#Main will process all the error conditions, commands and filters was used and write out finished result with successful exit
+main(){
+	HelpCheck "$@"
+	FileCheck "$@"
+	LogsCheck "$@"
+	GetArgs "$@"
+	NameCheck
+	TimeCheck
+	if "$list_used" || [ "$command_used" = false ]; then
+		LogsRead "$@" | List | After | Before | SortCurrency
+	else
+		LogsRead "$@" | List | After | Before | SortCurrency | Command
+	fi
+	
+	exit 0
+}
+
+main "$@"
